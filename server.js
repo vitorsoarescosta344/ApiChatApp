@@ -64,15 +64,19 @@ app.get("/getusers", async (req, res) => {
 	const token = req.headers["x-access-token"];
 	const decoded = jwt.verify(token, process.env.SECRET_KEY);
 
+	const { id, nome, conversas } = await Cadastro.findOne({
+		email: decoded.user.email,
+	});
 
-	const { id, nome, conversas } = await Cadastro.findOne({ email: decoded.user.email });
+	const arr1 = await Message.find({ $in: { _id: conversas } })
+		.where("nomeDoRemetente")
+		.equals(nome);
+	const arr2 = await Message.find({ $in: { _id: conversas } })
+		.where("nomeDoDestinatario")
+		.equals(nome);
 
-    const arr1 = await Message.find({ $in: { _id: conversas } }).where('nomeDoRemetente').equals(nome);
-    const arr2 = await Message.find({ $in: { _id: conversas } }).where('nomeDoDestinatario').equals(nome)
+	const messages = arr1.concat(arr2);
 
-    
-    const messages = arr1.concat(arr2)
-	
 	return res.json({ contacts: messages, id: id, nome: nome });
 });
 
@@ -80,30 +84,43 @@ app.post("/addChats", async (req, res) => {
 	const { email } = req.body;
 
 	const token = req.headers["x-access-token"];
-    const decoded = jwt.verify(token, process.env.SECRET_KEY);
-    const remetente = await Cadastro.findOne({ email: decoded.user.email })
-    const destinatario = await Cadastro.findOne({ email: email })
-    const {_id} = await Message.create({id: Math.floor(Math.random() * 1000000), nomeDoRemetente: remetente.nome, nomeDoDestinatario: destinatario.nome, fotoDoDestinatario: destinatario.foto, fotoDoRemetente: remetente.foto})
-    const cadastro = Cadastro.findOneAndUpdate({ email: email }, { $push: { conversas: _id } })
-    
-    return res.status(200).send()
+	const decoded = jwt.verify(token, process.env.SECRET_KEY);
+	const remetente = await Cadastro.findOne({ email: decoded.user.email });
+	const destinatario = await Cadastro.findOne({ email: email });
+	const { _id } = await Message.create({
+		id: Math.floor(Math.random() * 1000000),
+		nomeDoRemetente: remetente.nome,
+		nomeDoDestinatario: destinatario.nome,
+		fotoDoDestinatario: destinatario.foto,
+		fotoDoRemetente: remetente.foto,
+	});
+	const cadastro = Cadastro.findOneAndUpdate(
+		{ email: email },
+		{ $push: { conversas: _id } }
+	);
+
+	return res.status(200).send();
 });
 
-app.post('/getiddestinatario', async (req, res) => {
-    const { nome } = req.body
-    
-    const { id } = await cadastro.findOne({ nome: nome })
+app.post("/getiddestinatario", async (req, res) => {
+	const { nome } = req.body;
 
-    return res.json({id: id})
-})
+	const { id } = await Cadastro.findOne({ nome: nome });
 
-app.post('/getmessages', async (req, res) => {
-    const { idDaConversa } = req.body
-    
-    const { messages } = await Message.findById(idDaConversa)
-    
-    return res.json({messages: messages})
-})
+	return res.json({ id: id });
+});
+
+app.post("/getmessages", async (req, res) => {
+	const { idDaConversa } = req.body;
+	console.log(idDaConversa);
+	const conversaAtualizada = await Message.aggregate([
+		{ $match: { _id: mongoose.Types.ObjectId(idDaConversa) } },
+		{ $unwind: "$messages" },
+		{ $sort: {'messages.createdAt': -1}}
+	]).project('messages')
+	console.log(conversaAtualizada);
+	return res.json({ messages: conversaAtualizada });
+});
 
 app.post("/cadastro", uploadHandler.any(), async (req, res) => {
 	const { nome, id, email, senha } = req.body;
@@ -138,11 +155,19 @@ app.post("/cadastro", uploadHandler.any(), async (req, res) => {
 
 io.on("connection", async (socket) => {
 	console.log("user connected");
-	socket.on("message", async ({message, idDaConversa}) => {
-		await Message.findOneAndUpdate({ _id: idDaConversa }, {$push: {messages: message}});
-        const conversaAtualizada = await Message.findById(idDaConversa);
-        socket.emit('mensagemNova', conversaAtualizada)
-		
+	socket.on("message", async ({ message, idDaConversa }) => {
+		await Message.findOneAndUpdate(
+			{ _id: idDaConversa },
+			{ $push: { messages: message } }
+		);
+		const conversaAtualizada = await Message.aggregate([
+			{ $match: { _id: mongoose.Types.ObjectId(idDaConversa) } },
+			{ $unwind: "$messages" },
+			{ $sort: { "messages.createdAt": -1 } },
+		]).project("messages");
+
+		console.log(conversaAtualizada);
+		socket.emit("mensagemNova", conversaAtualizada);
 	});
 });
 
